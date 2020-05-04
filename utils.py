@@ -3,13 +3,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.autograd as autograd
 import torch.optim as optim
-
+import pandas as pd
 import gym
 import random
 import numpy as np
 from collections import deque
 
-def mini_batch_train(env, agent, max_episodes, max_steps, batch_size,render=True):#小批次訓練
+def mini_batch_train(env, agent, max_episodes, max_steps, batch_size,render_area,score_area,progress_bar):#小批次訓練
     episode_rewards = []
     best_agent = None
 
@@ -18,8 +18,8 @@ def mini_batch_train(env, agent, max_episodes, max_steps, batch_size,render=True
         episode_reward = 0
         
         for step in range(max_steps): # step 代表每一個遊戲步驟
-            if render == True:
-                env.render()
+            if (render_area != None)&(episode%1 == 0):
+                render_area.image(env.render(mode='rgb_array'))
             action = agent.get_action(state)
             next_state, reward, done, _ = env.step(action)
             agent.replay_buffer.push(state, action, reward, next_state, done) #push經驗
@@ -30,7 +30,10 @@ def mini_batch_train(env, agent, max_episodes, max_steps, batch_size,render=True
 
             if done or step == max_steps-1:#如果遊戲結束就打印這回合的分數
                 episode_rewards.append(episode_reward) # 記錄這回合reward
+                row = pd.DataFrame([[episode_reward,np.mean(episode_rewards[-10:])]],columns=['reward','rolling_reward']).astype("float")
+                score_area.add_rows(row)
                 print("Episode " + str(episode) + ": " + str(episode_reward))
+                progress_bar.progress((episode + 1)/max_episodes)
                 # 對這回合agent表現做評估
                 if episode_reward >= max(episode_rewards):
                     best_agent = agent # 保存當前最佳agent
