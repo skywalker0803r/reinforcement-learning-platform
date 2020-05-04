@@ -1,67 +1,59 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import time
-from PIL import Image
 import gym
-import pyglet
-from utils import DDPGAgent,mini_batch_train
+from agent import DQNAgent,A2CAgent,DDPGAgent
+from utils import on_policy_train,off_policy_train,get_agent_params
 
-# pyglet setting=======================================
-pyglet.options['shadow_window']=True
+agent_dict = {
+				'DQN':DQNAgent,
+				'A2C':A2CAgent,
+				'DDPG':DDPGAgent,
+				}
 
-# Hyperparam setting====================================
-param_dict = {'DDPG':{'max_episodes':{'min':100,'max':200},
-						'max_steps':{'min':500,'max':1000},
-						'batch_size':{'min':32,'max':128},
-						'gamma':{'min':0.9,'max':0.999},
-						'tau':{'min':1e-2,'max':1e-1},
-						'buffer_maxlen':{'min':100000,'max':1000000},
-						'actor_lr':{'min':1e-3,'max':1e-2},
-						'critic_lr':{'min':1e-3,'max':1e-2}}
-						}
+off_policy_alg = ['DQN','DDPG']
+on_policy_alg = ['A2C']
 
-# main loop=============================================
-def main(alg_slot,env_slot,param_slot,render_area,score_area,progress_bar):
-	# create env
-	env = gym.make(env_slot)
-	env.reset()
-	
-	# create agent
-	agent = DDPGAgent(env,param_slot['gamma'], 
-		param_slot['tau'],param_slot['buffer_maxlen'],param_slot['critic_lr'], param_slot['actor_lr'])
-	
-	# training agent use env
-	episode_rewards,agent = mini_batch_train(env, agent, 
-		param_slot['max_episodes'], param_slot['max_steps'], param_slot['batch_size'],render_area=render_area,score_area=score_area,progress_bar=progress_bar)
-
-	# after traininged plot loss history
-	plt.plot(np.array(episode_rewards))
-	st.pyplot()
-
-# show main page=========================================
-st.title("reinforcement learning platform")
+# main UI
+st.title('reinforcement learning platform')
 game_title = st.empty()
 render_area = st.empty()
 progress_bar = st.progress(0)
 score_area = st.line_chart(pd.DataFrame([[np.nan,np.nan]],columns=['reward','rolling_reward']).astype("float"))
 
-# show left sidebar======================================
+# left sidebar select algo env and common params
 st.sidebar.subheader('algorithm')
-alg_slot = st.sidebar.selectbox('algorithm',('DDPG','A2C'))
+alg_name = st.sidebar.selectbox('',('DQN','A2C','DDPG'))
 
 st.sidebar.subheader('environment')
-env_slot = st.sidebar.selectbox('environment',('Pendulum-v0','LunarLander-v2'))
-game_title.text(env_slot)
+env_name = st.sidebar.selectbox('',('CartPole-v0','Pendulum-v0','LunarLander-v2','LunarLanderContinuous-v2','BipedalWalker-v3'))
 
 st.sidebar.subheader('Hyperparamter')
-param_slot = {}
-for param_name,param_values in param_dict[alg_slot].items():
-	param_slot[param_name] = st.sidebar.number_input(param_name,param_values['min'],param_values['max'])
+max_episodes = st.sidebar.number_input('max_episodes',value=1000)
+max_steps = st.sidebar.number_input('max_steps',value=1000)
 
+# if the algorithm need batch_size set batch_size
+if alg_name in off_policy_alg:
+	batch_size = st.sidebar.number_input('batch_size',value=32)
+
+# get_agent_params and user set 
+alg_param = {}
+for key,value in get_agent_params(agent_dict[alg_name]).items():
+	alg_param[key] = st.sidebar.number_input(key,value=value,format="%.4f")
+
+# start button
 start = st.sidebar.button('start training')
 
-# press start button to run=================================
 if start:
-	main(alg_slot,env_slot,param_slot,render_area,score_area,progress_bar)
-		
+	env = gym.make(env_name)
+	agent = agent_dict[alg_name](env,**alg_param)
+	
+	if alg_name in on_policy_alg:
+		on_policy_train(env, agent, max_episodes, max_steps,render_area,score_area,progress_bar)
+	
+	if alg_name in off_policy_alg:
+		off_policy_train(env, agent, max_episodes, max_steps, batch_size,render_area,score_area,progress_bar)
+
+
+
+
