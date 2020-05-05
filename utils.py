@@ -307,7 +307,7 @@ class OUNoise(object):
         return np.clip(action + ou_state, self.low, self.high)
 
 # off policy train method for DQN DDPG need batch_size(replay_buffer)
-def off_policy_train(env, agent, max_episodes, max_steps, batch_size,render_area,score_area,progress_bar):
+def single_step_update_train(env, agent, max_episodes, max_steps, batch_size,render_area,score_area,progress_bar):
     episode_rewards = []
 
     for episode in range(max_episodes):
@@ -339,7 +339,7 @@ def off_policy_train(env, agent, max_episodes, max_steps, batch_size,render_area
     return episode_rewards,agent
 
 # on policy train method for A2C not have batch_size(replay_buffer)
-def on_policy_train(env, agent, max_episodes, max_steps,render_area,score_area,progress_bar):
+def episode_update_train(env, agent, max_episodes, max_steps,render_area,score_area,progress_bar):
     episode_rewards = []
 
     for episode in range(max_episodes):

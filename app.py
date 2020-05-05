@@ -2,17 +2,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import gym
-from agent import DQNAgent,A2CAgent,DDPGAgent
-from utils import on_policy_train,off_policy_train,get_agent_params
+from agent import DQNAgent,A2CAgent,DDPGAgent,TD3Agent
+from utils import get_agent_params,episode_update_train,single_step_update_train
 
 agent_dict = {
 				'DQN':DQNAgent,
 				'A2C':A2CAgent,
 				'DDPG':DDPGAgent,
+				'TD3':TD3Agent
 				}
 
-off_policy_alg = ['DQN','DDPG']
-on_policy_alg = ['A2C']
+single_step_update_alg = ['DQN','DDPG','TD3']
+episode_update_alg = ['A2C']
 
 # main UI
 st.title('reinforcement learning platform')
@@ -23,7 +24,7 @@ score_area = st.line_chart(pd.DataFrame([[np.nan,np.nan]],columns=['reward','rol
 
 # left sidebar select algo env and common params
 st.sidebar.subheader('algorithm')
-alg_name = st.sidebar.selectbox('',('DQN','A2C','DDPG'))
+alg_name = st.sidebar.selectbox('',('DQN','A2C','DDPG','TD3'))
 
 st.sidebar.subheader('environment')
 env_name = st.sidebar.selectbox('',('CartPole-v0','Pendulum-v0','LunarLander-v2','LunarLanderContinuous-v2','BipedalWalker-v3'))
@@ -33,10 +34,10 @@ max_episodes = st.sidebar.number_input('max_episodes',value=1000)
 max_steps = st.sidebar.number_input('max_steps',value=1000)
 
 # if the algorithm need batch_size set batch_size
-if alg_name in off_policy_alg:
+if alg_name in single_step_update_alg:
 	batch_size = st.sidebar.number_input('batch_size',value=32)
 
-# get_agent_params and user set 
+# get_agent_params and user set
 alg_param = {}
 for key,value in get_agent_params(agent_dict[alg_name]).items():
 	alg_param[key] = st.sidebar.number_input(key,value=value,format="%.4f")
@@ -48,11 +49,11 @@ if start:
 	env = gym.make(env_name)
 	agent = agent_dict[alg_name](env,**alg_param)
 	
-	if alg_name in on_policy_alg:
-		on_policy_train(env, agent, max_episodes, max_steps,render_area,score_area,progress_bar)
+	if alg_name in episode_update_alg:
+		episode_update_train(env, agent, max_episodes, max_steps,render_area,score_area,progress_bar)
 	
-	if alg_name in off_policy_alg:
-		off_policy_train(env, agent, max_episodes, max_steps, batch_size,render_area,score_area,progress_bar)
+	if alg_name in single_step_update_alg:
+		single_step_update_train(env, agent, max_episodes, max_steps, batch_size,render_area,score_area,progress_bar)
 
 
 

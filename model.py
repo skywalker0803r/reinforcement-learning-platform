@@ -108,7 +108,7 @@ class PolicyNetwork(nn.Module):
 
         return logits
 
-#======================DDPG MODEL======================================
+#======================DDPG,TD3 MODEL======================================
 
 class Critic(nn.Module):
 
