@@ -306,3 +306,139 @@ class TD3Agent:
         
         for target_param, param in zip(self.actor_target.parameters(), self.actor.parameters()):
             target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
+
+class PPOAgent:
+    def __init__(self,env,gamma=0.99,lr=1e-3,clip=0.2,K_epoch=8,buffer_maxsize=100000):
+        self.device = "cpu"
+        
+        # env
+        self.env = env
+        self.obs_dim = env.observation_space.shape[0]
+        self.action_dim = env.action_space.n
+        
+        # Hyperparamters
+        self.gamma = gamma
+        self.lr = lr
+        self.clip = clip
+        self.K_epoch = int(K_epoch)
+        
+        # critic,init
+        self.critic = ppo_critic(self.obs_dim)
+        self.critic.apply(self._weights_init)
+        
+        # actor_new,init
+        self.actor_new = ppo_actor(self.obs_dim,self.action_dim)
+        self.actor_new.apply(self._weights_init)
+        
+        # actor_old,sync
+        self.actor_old = ppo_actor(self.obs_dim,self.action_dim)
+        self.sync()
+        
+        # opt
+        self.actor_optimizer = optim.Adam(self.actor_new.parameters(),lr=lr)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(),lr=lr)
+        
+        # replay buffer
+        self.replay_buffer = BasicBuffer(max_size=int(buffer_maxsize))
+        
+        # recorder
+        self.recorder = {'a_loss':[],
+                         'v_loss':[],
+                         'ratio':[]}
+            
+    @staticmethod
+    def _weights_init(m):
+        if isinstance(m, nn.Conv2d):
+            nn.init.xavier_uniform_(m.weight)
+            nn.init.constant_(m.bias, 0.1)
+    
+    def sync(self):
+        for old_param, new_param in zip(self.actor_old.parameters(),self.actor_new.parameters()):
+            old_param.data.copy_(new_param.data)
+
+    def get_action(self, state):
+        state = torch.FloatTensor(state).to(self.device)
+        probs = self.actor_new.forward(state) # softmax_probs
+        dist = Categorical(probs) # Categorical distribution
+        act = dist.sample() # smaple action from this Categorical distribution
+        return act.detach().item()
+
+    def get_value(state):
+        state = torch.FloatTensor(state).to(self.device)
+        value = self.critic(state)
+        return value.item()
+
+    def update(self,batch_size=64):
+        for k in range(self.K_epoch):
+            
+            # sample mini_batch_data from replay_buffer
+            s,a,r,s_,d = self.replay_buffer.sample(batch_size)
+            s = torch.FloatTensor(s).to(self.device)
+            a = torch.LongTensor(a).to(self.device).unsqueeze(dim=1)
+            r = torch.FloatTensor(r).to(self.device)
+            s_ = torch.FloatTensor(s_).to(self.device)
+            d = torch.FloatTensor(d).to(self.device).unsqueeze(dim=1)
+            
+            # calculate critic loss
+            v_target = r + self.gamma*self.critic(s_)*(1-d)
+            v_current = self.critic(s)
+            adv =  v_target - v_current
+            v_loss = 0.5*(adv**2).mean()
+            self.recorder['v_loss'].append(v_loss.item())
+            
+            # calculate actor loss
+            new_p = torch.gather(self.actor_new(s),1,a)
+            old_p = torch.gather(self.actor_old(s),1,a)
+            ratio = new_p / (old_p + 1e-8)
+            self.recorder['ratio'].append(ratio.detach().numpy())
+            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+            surr1 = ratio*adv.detach()
+            surr2 = torch.clamp(ratio,1-self.clip,1+self.clip)*adv.detach()
+            a_loss = -torch.min(surr1,surr2).mean()
+            self.recorder['a_loss'].append(a_loss.item())
+            
+            # update critic
+            self.critic_optimizer.zero_grad()
+            v_loss.backward()
+            self.critic_optimizer.step()
+            
+            # update actor
+            self.actor_optimizer.zero_grad()
+            a_loss.backward()
+            self.actor_optimizer.step()
+        
+        # sync
+        self.sync()
+            
+    def train(self, max_episodes=100, max_steps=10000, batch_size=256, render_area=None, score_area=None, progress_bar=None):
+        episode_rewards = []
+        for episode in range(max_episodes):
+            state = self.env.reset()
+            episode_reward = 0
+            for step in range(max_steps):
+                render_area.image(self.env.render(mode='rgb_array'))
+                action = self.get_action([state])
+                next_state, reward, done, _ = self.env.step(action) 
+                self.replay_buffer.push(state, action, reward, next_state, done)
+                episode_reward += reward
+                
+                if len(self.replay_buffer) >= batch_size:
+                    self.update(batch_size)
+                    
+                if done or step == max_steps-1:
+                    episode_rewards.append(episode_reward)
+                    print("Episode " + str(episode) + ": " + str(episode_reward))
+                    
+                    row = pd.DataFrame([[episode_reward,np.mean(episode_rewards[-10:])]],columns=['reward','rolling_reward']).astype("float")
+                    score_area.add_rows(row)
+                    progress_bar.progress((episode + 1)/max_episodes)
+                    
+                    if episode_rewards[-1] == 500:
+                        print('sloved!!! you get 500 score!')
+                        return episode_rewards
+                    
+                    break
+                
+                state = next_state
+        
+        return episode_rewards

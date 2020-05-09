@@ -150,3 +150,25 @@ class Actor(nn.Module):
         x = torch.tanh(self.linear3(x))
 
         return x
+# ===========PPO Agent===========================================
+class ppo_critic(nn.Module):
+    def __init__(self, input_dim):# state -> value
+        super(ppo_critic, self).__init__()
+        self.fc1 = nn.Linear(input_dim,128)
+        self.fc2 = nn.Linear(128,1) 
+
+    def forward(self, state):
+        value = F.relu(self.fc1(state))
+        value = self.fc2(value)
+        return value
+
+class ppo_actor(nn.Module):
+    def __init__(self, input_dim, output_dim):# state -> action_probs
+        super(ppo_actor, self).__init__()
+        self.fc1 = nn.Linear(input_dim,128)
+        self.fc2 = nn.Linear(128, output_dim)
+    
+    def forward(self, state):
+        logits = F.relu(self.fc1(state))
+        logits = self.fc2(logits)
+        return F.softmax(logits*10,dim=-1)

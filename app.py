@@ -2,17 +2,18 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import gym
-from agent import DQNAgent,A2CAgent,DDPGAgent,TD3Agent
+from agent import DQNAgent,A2CAgent,DDPGAgent,TD3Agent,PPOAgent
 from utils import get_agent_params,episode_update_train,single_step_update_train
 
 agent_dict = {
 				'DQN':DQNAgent,
 				'A2C':A2CAgent,
 				'DDPG':DDPGAgent,
-				'TD3':TD3Agent
+				'TD3':TD3Agent,
+				'PPO':PPOAgent,
 				}
 
-single_step_update_alg = ['DQN','DDPG','TD3']
+single_step_update_alg = ['DQN','DDPG','TD3','PPO']
 episode_update_alg = ['A2C']
 
 # main UI
@@ -24,7 +25,7 @@ score_area = st.line_chart(pd.DataFrame([[np.nan,np.nan]],columns=['reward','rol
 
 # left sidebar select algo env and common params
 st.sidebar.subheader('algorithm')
-alg_name = st.sidebar.selectbox('',('DQN','A2C','DDPG','TD3'))
+alg_name = st.sidebar.selectbox('',tuple(agent_dict.keys()))
 
 st.sidebar.subheader('environment')
 env_name = st.sidebar.selectbox('',('CartPole-v0','Pendulum-v0','LunarLander-v2','LunarLanderContinuous-v2','BipedalWalker-v3'))
@@ -48,6 +49,11 @@ start = st.sidebar.button('start training')
 if start:
 	env = gym.make(env_name)
 	agent = agent_dict[alg_name](env,**alg_param)
+
+	if alg_name == 'PPO':
+		print('PPO selected!')
+		agent.train(max_episodes=max_episodes,max_steps=max_steps,batch_size=batch_size,
+			render_area=render_area,score_area=score_area,progress_bar=progress_bar)
 	
 	if alg_name in episode_update_alg:
 		episode_update_train(env, agent, max_episodes, max_steps,render_area,score_area,progress_bar)
