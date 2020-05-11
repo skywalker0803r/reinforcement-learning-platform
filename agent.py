@@ -15,29 +15,25 @@ all agent have get_action and update method and default params
     
 class DQNAgent:
 
-    def __init__(self, env, use_conv=True, learning_rate=3e-4, gamma=0.99, buffer_size=10000):
+    def __init__(self, env,learning_rate=1e-3,gamma=0.99,eps=0.05,buffer_size=10000):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.env = env
+        
         self.learning_rate = learning_rate
         self.gamma = gamma
+        self.eps = eps
+        
+        self.model = DQN(env.observation_space.shape[0], env.action_space.n).to(self.device)
         self.replay_buffer = BasicBuffer(max_size=int(buffer_size))
-	
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        self.use_conv = use_conv
-        if self.use_conv:
-            self.model = ConvDQN(env.observation_space.shape, env.action_space.n).to(self.device)
-        else:
-            self.model = DQN(env.observation_space.shape, env.action_space.n).to(self.device)
-
         self.optimizer = torch.optim.Adam(self.model.parameters())
         self.MSE_loss = nn.MSELoss()
 
-    def get_action(self, state, eps=0.20):
-        state = torch.FloatTensor(state).float().unsqueeze(0).to(self.device)
+    def get_action(self, state, eps=0.05):
+        state = torch.FloatTensor([state]).to(self.device)
         qvals = self.model.forward(state)
-        action = np.argmax(qvals.cpu().detach().numpy())
+        action = qvals.cpu().detach().numpy().argmax()
         
-        if(np.random.randn() < eps):
+        if(np.random.randn() < self.eps):
             return self.env.action_space.sample()
 
         return action
@@ -45,32 +41,60 @@ class DQNAgent:
     def compute_loss(self, batch):
         states, actions, rewards, next_states, dones = batch
         states = torch.FloatTensor(states).to(self.device)
-        actions = torch.LongTensor(actions).to(self.device)
-        rewards = torch.FloatTensor(rewards).to(self.device)
+        actions = torch.LongTensor(actions).to(self.device).unsqueeze(1)
+        rewards = torch.FloatTensor(rewards).to(self.device).squeeze(1)
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.FloatTensor(dones)
 
-        curr_Q = self.model.forward(states).gather(1, actions.unsqueeze(1))
-        curr_Q = curr_Q.squeeze(1)
+        curr_Q = self.model.forward(states).gather(1,actions).squeeze(1)
         next_Q = self.model.forward(next_states)
-        max_next_Q = torch.max(next_Q, 1)[0]
-        expected_Q = rewards.squeeze(1) + self.gamma * max_next_Q
+        max_next_Q = torch.max(next_Q,1)[0]
+        expected_Q = rewards + self.gamma * max_next_Q
 
         loss = self.MSE_loss(curr_Q, expected_Q)
+        
         return loss
 
     def update(self, batch_size):
-        batch = self.replay_buffer.sample(batch_size)
-        loss = self.compute_loss(batch)
+    	if len(self.replay_buffer) > batch_size:
+        	batch = self.replay_buffer.sample(batch_size)
+        	loss = self.compute_loss(batch)
+        	self.optimizer.zero_grad()
+        	loss.backward()
+        	self.optimizer.step()
 
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
+    def train(self,max_episodes,batch_size,render_area,score_area,progress_bar):
+        episode_rewards = []
+        for episode in range(max_episodes):
+            # init all
+            state = self.env.reset()
+            episode_reward = 0
+            done = False
+            
+            # not done
+            while not done:
+                render_area.image(self.env.render(mode='rgb_array'))
+                action = self.get_action(state)
+                next_state, reward, done, _ = self.env.step(action)
+                self.replay_buffer.push(state, action, reward, next_state, done)
+                episode_reward += reward 
+                self.update(batch_size)
+                state = next_state   
+            
+            # is done
+            episode_rewards.append(episode_reward)
+            print("Episode:{} reward:{}".format(episode,episode_reward))      
+            row = pd.DataFrame([[episode_reward,np.mean(episode_rewards[-10:])]],
+            	columns=['reward','rolling_reward']).astype("float")
+            score_area.add_rows(row)
+            progress_bar.progress((episode + 1)/max_episodes)            
+        
+        return episode_rewards
 
 class A2CAgent():
 
-    def __init__(self, env, gamma=0.99, lr=1e-4):
-        self.device = torch.device("cpu")
+    def __init__(self, env, gamma=0.99, lr=1e-3):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.env = env
         self.obs_dim = env.observation_space.shape[0]
@@ -79,7 +103,7 @@ class A2CAgent():
         self.gamma = gamma
         self.lr = lr
         
-        self.model = TwoHeadNetwork(self.obs_dim, self.action_dim).to(self.device)
+        self.model = ActorCritic(self.obs_dim, self.action_dim).to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.lr)
     
     def get_action(self, state):
@@ -98,7 +122,8 @@ class A2CAgent():
         dones = torch.FloatTensor([sars[4] for sars in trajectory]).view(-1, 1).to(self.device)
         
         # compute discounted rewards
-        discounted_rewards = [torch.sum(torch.FloatTensor([self.gamma**i for i in range(rewards[j:].size(0))])\
+        discounted_rewards = [torch.sum(torch.FloatTensor(
+        	[self.gamma**i for i in range(rewards[j:].size(0))]).to(self.device)
              * rewards[j:]) for j in range(rewards.size(0))]  # sorry, not the most readable code.
         value_targets = rewards.view(-1, 1) + torch.FloatTensor(discounted_rewards).view(-1, 1).to(self.device)
         
@@ -131,17 +156,48 @@ class A2CAgent():
         loss.backward()
         self.optimizer.step()
 
+    def train(self,max_episodes,batch_size,render_area,score_area,progress_bar):
+        episode_rewards = []
+        for episode in range(max_episodes):
+            # init all
+            state = self.env.reset()
+            episode_reward = 0
+            done = False
+            trajectory = []
+        
+            # not done
+            while not done:
+                render_area.image(self.env.render(mode='rgb_array'))
+                action = self.get_action(state)
+                next_state, reward, done, _ = self.env.step(action)
+                trajectory.append([state, action, reward, next_state, done])
+                episode_reward += reward 
+                state = next_state   
+	        
+            # is done
+            self.update(trajectory)
+            episode_rewards.append(episode_reward)
+            print("Episode:{} reward:{}".format(episode,episode_reward))      
+            row = pd.DataFrame([[episode_reward,np.mean(episode_rewards[-10:])]],
+            	columns=['reward','rolling_reward']).astype("float")
+            score_area.add_rows(row)
+            progress_bar.progress((episode + 1)/max_episodes)            
+        
+        return episode_rewards
+
+#=================================================================================================================================================
 class DDPGAgent:
     
     def __init__(self, env, gamma=0.99, tau=1e-2, buffer_maxlen=100000, critic_learning_rate=1e-3, actor_learning_rate=1e-3):
+        # device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
+        # env
         self.env = env
         self.obs_dim = env.observation_space.shape[0]
         self.action_dim = env.action_space.shape[0]
         
         # hyperparameters
-        self.env = env
         self.gamma = gamma
         self.tau = tau
         
@@ -149,8 +205,12 @@ class DDPGAgent:
         self.critic = Critic(self.obs_dim, self.action_dim).to(self.device)
         self.critic_target = Critic(self.obs_dim, self.action_dim).to(self.device)
         
-        self.actor = Actor(self.obs_dim, self.action_dim).to(self.device)
-        self.actor_target = Actor(self.obs_dim, self.action_dim).to(self.device)
+        self.actor = Actor(self.obs_dim, self.action_dim,ddpg=True).to(self.device)
+        self.actor_target = Actor(self.obs_dim, self.action_dim,ddpg=True).to(self.device)
+        
+        # Copy actor target parameters 
+        for target_param, param in zip(self.actor_target.parameters(), self.actor.parameters()):
+            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
     
         # Copy critic target parameters
         for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
@@ -159,18 +219,23 @@ class DDPGAgent:
         # optimizers
         self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=critic_learning_rate)
         self.actor_optimizer  = optim.Adam(self.actor.parameters(), lr=actor_learning_rate)
-    
+        
+        # other utils
         self.replay_buffer = BasicBuffer(buffer_maxlen)        
         self.noise = OUNoise(self.env.action_space)
         
     def get_action(self, obs):
-        state = torch.FloatTensor(obs).unsqueeze(0).to(self.device)
+        state = torch.FloatTensor([obs]).to(self.device)
         action = self.actor.forward(state)
         action = action.squeeze(0).cpu().detach().numpy()
-
         return action
     
     def update(self, batch_size):
+        # check data enough
+        if len(self.replay_buffer) <= batch_size:
+            return 'data not enough!!'
+        
+        # sample a minibatch data for train
         states, actions, rewards, next_states, _ = self.replay_buffer.sample(batch_size)
         state_batch, action_batch, reward_batch, next_state_batch, masks = self.replay_buffer.sample(batch_size)
         state_batch = torch.FloatTensor(state_batch).to(self.device)
@@ -178,15 +243,14 @@ class DDPGAgent:
         reward_batch = torch.FloatTensor(reward_batch).to(self.device)
         next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
         masks = torch.FloatTensor(masks).to(self.device)
-   
+        
+        # update critic 
         curr_Q = self.critic.forward(state_batch, action_batch)
         next_actions = self.actor_target.forward(next_state_batch)
         next_Q = self.critic_target.forward(next_state_batch, next_actions.detach())
         expected_Q = reward_batch + self.gamma * next_Q
-        
-        # update critic
         q_loss = F.mse_loss(curr_Q, expected_Q.detach())
-
+        
         self.critic_optimizer.zero_grad()
         q_loss.backward() 
         self.critic_optimizer.step()
@@ -205,6 +269,37 @@ class DDPGAgent:
         for target_param, param in zip(self.critic_target.parameters(), self.critic.parameters()):
             target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
 
+
+    def train(self,max_episodes,batch_size,render_area,score_area,progress_bar):
+        episode_rewards = []
+        for episode in range(max_episodes):    
+            # init all
+            state = self.env.reset()
+            episode_reward = 0
+            done = False
+            
+            # not done
+            while not done:
+                render_area.image(self.env.render(mode='rgb_array'))
+                action = self.get_action(state)
+                print(action)
+                next_state, reward, done, _ = self.env.step(action)
+                self.replay_buffer.push(state, action, reward, next_state, done)
+                episode_reward += reward 
+                self.update(batch_size)
+                state = next_state   
+            
+            # is done
+            episode_rewards.append(episode_reward)
+            print("Episode:{} reward:{}".format(episode,episode_reward))      
+            row = pd.DataFrame([[episode_reward,np.mean(episode_rewards[-10:])]],
+            	columns=['reward','rolling_reward']).astype("float")
+            score_area.add_rows(row)
+            progress_bar.progress((episode + 1)/max_episodes)            
+        
+        return episode_rewards
+
+#=====================================================================================================================================================
 class TD3Agent:
     def __init__(self, env, gamma=0.99, tau=1e-2, buffer_maxlen=100000, delay_step=2, noise_std=0.2, noise_bound=0.5, critic_lr=1e-3, actor_lr=1e-3):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
