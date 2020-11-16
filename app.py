@@ -3,14 +3,16 @@ import pandas as pd
 import numpy as np
 import gym
 from agent.PPO import PPOAgent
+from agent.DDPG import DDPGAgent
 from utils import get_agent_params
 
 # config
-agent_dict = {'PPO':PPOAgent}
+agent_dict = {'PPO':PPOAgent,
+              'DDPG':DDPGAgent}
 env_list = ['CartPole-v0','Pendulum-v0','LunarLander-v2','LunarLanderContinuous-v2','BipedalWalker-v3']
 
 # main UI
-st.title('Reinforcement Learning Platform 2.0')
+st.title('Reinforcement Learning Platform 3.0')
 game_title = st.empty()
 render_area = st.empty()
 progress_bar = st.progress(0)
